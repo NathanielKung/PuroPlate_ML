@@ -1,12 +1,12 @@
 """
 PuroScore v2 — Main Entry Point
-Trains the hybrid model on the dataset, then runs an interactive
-consultation session for new products.
+Dataset: allergen_dataset_v6.xlsx
 
 Usage:
-    python main.py                        # interactive mode
-    python main.py --demo                 # run 3 built-in demo products
-    python main.py --train-only           # train + save model, no consult
+    python3 main.py                  # interactive consultation mode
+    python3 main.py --demo           # 3 built-in demo products
+    python3 main.py --train-only     # train + save, no consult prompt
+    python3 main.py --retrain        # force retrain (ignore saved model)
 """
 
 import sys
@@ -14,60 +14,77 @@ import os
 import argparse
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.ml_model  import PuroV2Model
-from src.consult   import generate
+from src.ml_model import PuroV2Model
+from src.consult  import generate
 
-DATA_PATH  = os.path.join(os.path.dirname(__file__), "test_dataset.xlsx")
+DATA_PATH  = os.path.join(os.path.dirname(__file__), "allergen_dataset_v6.xlsx")
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "puro_v2.pkl")
 
 DEMO_PRODUCTS = [
     (
         "Granola Bar",
-        "OATS, HONEY, NATURAL FLAVORS, CHOCOLATE CHIPS, MAY CONTAIN MILK",
+        "oats, honey, natural flavors, chocolate chips, may contain milk, produced in "
+        "a facility that also processes wheat and peanuts",
     ),
     (
         "Caesar Dressing",
-        "SOYBEAN OIL, WATER, PARMESAN CHEESE, ANCHOVIES, EGG YOLK, VINEGAR, SALT, SPICES",
+        "soybean oil, water, parmesan cheese (milk), anchovies (fish), egg yolk, "
+        "vinegar, salt, garlic, spices, natural flavors allergens: milk, eggs, fish, soy",
     ),
     (
-        "Plain Rice Cakes",
-        "WHOLE GRAIN BROWN RICE, SALT",
+        "PESTO alla GENOVESE",
+        "sunflower oil, fresh basil 30%, cashew nuts, parmigiano reggiano pdo cheese 5% "
+        "(milk), maize fibre, whey powder (milk), salt, milk protein, extra virgin olive oil, "
+        "sugar, basil extract, natural flavourings (milk), acidity regulator: lactic acid, "
+        "garlic allergens: milk, nuts",
     ),
 ]
+
+
+def load_dataset() -> pd.DataFrame:
+    if not os.path.exists(DATA_PATH):
+        print(f"\n  ERROR: Dataset not found at {DATA_PATH}")
+        print("  Place allergen_dataset_v6.xlsx in the project root.\n")
+        sys.exit(1)
+
+    # Row 0 = group headers (Product Info / CONTAINS / MAY CONTAIN / FLAGS)
+    # Row 1 = actual column names
+    df = pd.read_excel(DATA_PATH, header=1)
+    print(f"  Dataset loaded — {len(df)} rows  |  {len(df.columns)} columns")
+    return df
 
 
 def load_or_train(force_retrain: bool = False) -> PuroV2Model:
     if not force_retrain and os.path.exists(MODEL_PATH):
         print(f"  Loading saved model from {MODEL_PATH}")
-        return PuroV2Model.load(MODEL_PATH)
+        model = PuroV2Model.load(MODEL_PATH)
+        # Re-check if model was trained on older dataset schema
+        if not model._trained:
+            print("  Saved model invalid — retraining…")
+            return load_or_train(force_retrain=True)
+        return model
 
-    if not os.path.exists(DATA_PATH):
-        print(f"\n  ERROR: Dataset not found at {DATA_PATH}")
-        print("  Place test_dataset.xlsx in the project root and re-run.\n")
-        sys.exit(1)
-
-    df = pd.read_excel(DATA_PATH)
-    print(f"  Dataset loaded — {len(df)} rows, columns: {df.columns.tolist()}")
-
+    df    = load_dataset()
     model = PuroV2Model()
     model.train(df, verbose=True)
     model.save(MODEL_PATH)
     return model
 
 
-def run_consult(model: PuroV2Model, product_name: str, ingredients: str):
-    scores = model.predict_product(product_name, ingredients)
-    report = generate(product_name, ingredients, scores, model.eval_results)
+def run_consult(model: PuroV2Model, product_name: str, label_description: str):
+    scores = model.predict_product(product_name, label_description)
+    report = generate(product_name, label_description, scores, model.eval_results)
     print(report)
 
 
 def interactive(model: PuroV2Model):
-    print("\n" + "═" * 68)
+    print("\n" + "═" * 72)
     print("  PuroScore v2  ·  Allergen Consultation")
-    print("  Type 'quit' to exit")
-    print("═" * 68 + "\n")
+    print("  Paste the full ingredient / label text when prompted.")
+    print("  Type 'quit' to exit.")
+    print("═" * 72 + "\n")
 
     while True:
         try:
@@ -80,7 +97,7 @@ def interactive(model: PuroV2Model):
 
             ingr = input("  Ingredients   : ").strip()
             if not ingr:
-                print("  Please enter ingredient text.\n")
+                print("  Please enter ingredient / label text.\n")
                 continue
 
             print()
@@ -94,15 +111,15 @@ def interactive(model: PuroV2Model):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--demo",        action="store_true")
-    parser.add_argument("--train-only",  action="store_true")
-    parser.add_argument("--retrain",     action="store_true")
+    parser.add_argument("--demo",       action="store_true", help="Run 3 demo products")
+    parser.add_argument("--train-only", action="store_true", help="Train + save, no prompt")
+    parser.add_argument("--retrain",    action="store_true", help="Force retrain")
     args = parser.parse_args()
 
     model = load_or_train(force_retrain=args.retrain)
 
     if args.train_only:
-        print("  Training complete.")
+        print("  Done.")
         return
 
     if args.demo:
